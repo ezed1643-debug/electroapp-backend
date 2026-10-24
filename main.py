@@ -3,7 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
 import json
-import requests
+import google.generativeai as genai
+import os
 
 app = FastAPI()
 
@@ -42,56 +43,34 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN 100% AUTOMÁTICA (API DE MOUSER MEJORADA) ---
-def buscar_specs_auto(mpn: str):
-    API_KEY = "bd8f8ed6-4501-4f81-b569-4ce1d68bb3cc" 
+# --- EXTRACCIÓN INTELIGENTE CON IA (GOOGLE GEMINI) ---
+def buscar_specs_ia(mpn: str):
+    # La clave ahora se obtiene de las variables de entorno de Render
+    clave_secreta = os.getenv("GEMINI_API_KEY") 
     
-    url = f"https://api.mouser.com/api/v1/search/partnumber?apiKey={API_KEY}"
-    headers = {"Content-Type": "application/json"}
-    payload = {
-        "SearchByPartRequest": {
-            "mouserPartNumber": mpn,
-            "partSearchOptions": ""
-        }
-    }
+    # Manejo de error por si olvidaste configurar la variable en Render
+    if not clave_secreta:
+        return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
+        
+    genai.configure(api_key=clave_secreta)
+    
+    prompt = f"""
+    Eres un ingeniero electrónico experto. Necesito las 5 especificaciones técnicas más importantes del componente electrónico '{mpn}'.
+    Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional.
+    Ejemplo de formato: {{"Encapsulado": "TO-92", "Voltaje Máximo": "45V", "Corriente": "100mA", "Tipo": "Transistor NPN"}}
+    Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
+    """
     
     try:
-        respuesta = requests.post(url, json=payload, headers=headers)
-        if respuesta.status_code == 200:
-            datos = respuesta.json()
-            partes = datos.get("SearchResults", {}).get("Parts", [])
-            
-            if partes:
-                mejor_parte = []
-                
-                # 1. Buscar entre todos los resultados cuál tiene más datos técnicos
-                for parte in partes:
-                    atributos = parte.get("ProductAttributes", [])
-                    if len(atributos) > len(mejor_parte):
-                        mejor_parte = atributos
-                
-                # 2. Si encontró atributos, los procesamos
-                if mejor_parte:
-                    specs_filtradas = {}
-                    for attr in mejor_parte:
-                        nombre = attr.get("AttributeName")
-                        valor = attr.get("AttributeValue")
-                        
-                        # Filtramos datos comerciales irrelevantes para dejar solo lo técnico
-                        filtros = ["RoHS", "Lifecycle Status", "Product", "Brand", "Packaging", "Standard Pack Qty", "Factory Pack Quantity", "Type"]
-                        if nombre not in filtros:
-                            specs_filtradas[nombre] = valor
-                            
-                    # Si después de filtrar quedó vacío, agregamos un aviso
-                    if not specs_filtradas:
-                        return {"Aviso": "Mouser no proporcionó detalles técnicos avanzados para este componente."}
-                        
-                    return specs_filtradas
-                    
-    except Exception as e:
-        print(f"Error consultando API: {e}")
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
         
-    return {"Aviso": "Componente no encontrado en la base global o error de API."}
+        texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(texto_limpio)
+        
+    except Exception as e:
+        print(f"Error con la IA: {e}")
+        return {"Aviso": "Error al conectar con la Inteligencia Artificial."}
 
 # --- MODELOS ---
 class ComponenteWeb(BaseModel):
@@ -123,11 +102,11 @@ def obtener_componentes():
 
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
-    datasheet = f"https://octopart.com/search?q={comp.mpn}"
+    datasheet = f"[https://octopart.com/search?q=](https://octopart.com/search?q=){comp.mpn}"
     
-    # Llamada a la API de Mouser mejorada
-    specs_reales = buscar_specs_auto(comp.mpn)
-    specs_json = json.dumps(specs_reales)
+    # Llamada a la IA para obtener las especificaciones reales
+    specs_ia = buscar_specs_ia(comp.mpn)
+    specs_json = json.dumps(specs_ia)
     
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
