@@ -42,9 +42,8 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN 100% AUTOMÁTICA (API DE MOUSER) ---
+# --- EXTRACCIÓN 100% AUTOMÁTICA (API DE MOUSER MEJORADA) ---
 def buscar_specs_auto(mpn: str):
-    # API Key integrada
     API_KEY = "bd8f8ed6-4501-4f81-b569-4ce1d68bb3cc" 
     
     url = f"https://api.mouser.com/api/v1/search/partnumber?apiKey={API_KEY}"
@@ -63,18 +62,32 @@ def buscar_specs_auto(mpn: str):
             partes = datos.get("SearchResults", {}).get("Parts", [])
             
             if partes:
-                # Extraemos los atributos reales del primer resultado que encuentre
-                atributos_raw = partes[0].get("ProductAttributes", [])
-                specs_filtradas = {}
+                mejor_parte = []
                 
-                for attr in atributos_raw:
-                    nombre = attr.get("AttributeName")
-                    valor = attr.get("AttributeValue")
-                    # Filtramos datos irrelevantes para mantener el modal limpio
-                    if nombre not in ["RoHS", "Lifecycle Status", "Product", "Brand"]:
-                        specs_filtradas[nombre] = valor
+                # 1. Buscar entre todos los resultados cuál tiene más datos técnicos
+                for parte in partes:
+                    atributos = parte.get("ProductAttributes", [])
+                    if len(atributos) > len(mejor_parte):
+                        mejor_parte = atributos
+                
+                # 2. Si encontró atributos, los procesamos
+                if mejor_parte:
+                    specs_filtradas = {}
+                    for attr in mejor_parte:
+                        nombre = attr.get("AttributeName")
+                        valor = attr.get("AttributeValue")
                         
-                return specs_filtradas
+                        # Filtramos datos comerciales irrelevantes para dejar solo lo técnico
+                        filtros = ["RoHS", "Lifecycle Status", "Product", "Brand", "Packaging", "Standard Pack Qty", "Factory Pack Quantity", "Type"]
+                        if nombre not in filtros:
+                            specs_filtradas[nombre] = valor
+                            
+                    # Si después de filtrar quedó vacío, agregamos un aviso
+                    if not specs_filtradas:
+                        return {"Aviso": "Mouser no proporcionó detalles técnicos avanzados para este componente."}
+                        
+                    return specs_filtradas
+                    
     except Exception as e:
         print(f"Error consultando API: {e}")
         
@@ -112,7 +125,7 @@ def obtener_componentes():
 def agregar_componente_web(comp: ComponenteWeb):
     datasheet = f"https://octopart.com/search?q={comp.mpn}"
     
-    # ⚡ Llamada a la API de Mouser
+    # Llamada a la API de Mouser mejorada
     specs_reales = buscar_specs_auto(comp.mpn)
     specs_json = json.dumps(specs_reales)
     
