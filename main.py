@@ -6,12 +6,12 @@ import json
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN CORS (Permite enviar datos, leer y BORRAR) ---
+# --- CONFIGURACIÓN CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
     allow_credentials=True,
-    allow_methods=["*"],  # <--- Asterisco clave para habilitar DELETE
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
@@ -67,6 +67,9 @@ class ComponenteProyecto(BaseModel):
     componente_id: int
     cantidad: int
 
+class ActualizacionStock(BaseModel):
+    nuevo_stock: int
+
 # --- RUTAS DE INVENTARIO ---
 
 @app.get("/componentes")
@@ -81,7 +84,6 @@ def obtener_componentes():
 
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
-    # Enlace dinámico de datasheet y especificaciones base
     datasheet = f"https://octopart.com/search?q={comp.mpn}"
     specs = json.dumps({"Encapsulado": "ND", "RoHS": "Sí", "Categoría": "General"})
     
@@ -104,21 +106,33 @@ def borrar_componente(componente_id: int):
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
     
-    # 1. Verificar si el componente existe
     cursor.execute("SELECT id FROM componentes WHERE id = ?", (componente_id,))
     if not cursor.fetchone():
         conexion.close()
         raise HTTPException(status_code=404, detail="Componente no encontrado")
         
-    # 2. Borrarlo del inventario principal
     cursor.execute("DELETE FROM componentes WHERE id = ?", (componente_id,))
-    
-    # 3. Borrarlo también de las listas de materiales (BOM) para evitar datos fantasmas
     cursor.execute("DELETE FROM lista_materiales WHERE componente_id = ?", (componente_id,))
     
     conexion.commit()
     conexion.close()
     return {"mensaje": "Componente eliminado con éxito"}
+
+@app.put("/componentes/{componente_id}/stock")
+def actualizar_stock(componente_id: int, datos: ActualizacionStock):
+    conexion = sqlite3.connect("electrostock.db")
+    cursor = conexion.cursor()
+    
+    cursor.execute("SELECT id FROM componentes WHERE id = ?", (componente_id,))
+    if not cursor.fetchone():
+        conexion.close()
+        raise HTTPException(status_code=404, detail="Componente no encontrado")
+        
+    cursor.execute("UPDATE componentes SET stock = ? WHERE id = ?", (datos.nuevo_stock, componente_id))
+    conexion.commit()
+    conexion.close()
+    
+    return {"mensaje": "Stock actualizado correctamente", "nuevo_stock": datos.nuevo_stock}
 
 # --- RUTAS DE PROYECTOS ---
 
