@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
 import json
+import requests
 
 app = FastAPI()
 
@@ -19,7 +20,6 @@ app.add_middleware(
 def iniciar_db():
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
-    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS componentes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,28 +30,55 @@ def iniciar_db():
             especificaciones TEXT
         )
     """)
-    
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS proyectos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            nombre TEXT UNIQUE NOT NULL
-        )
-    """)
-    
+    cursor.execute("CREATE TABLE IF NOT EXISTS proyectos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)")
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS lista_materiales (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            proyecto_id INTEGER,
-            componente_id INTEGER,
-            cantidad_necesaria INTEGER NOT NULL,
-            FOREIGN KEY(proyecto_id) REFERENCES proyectos(id),
-            FOREIGN KEY(componente_id) REFERENCES componentes(id)
+            id INTEGER PRIMARY KEY AUTOINCREMENT, proyecto_id INTEGER, componente_id INTEGER, cantidad_necesaria INTEGER NOT NULL,
+            FOREIGN KEY(proyecto_id) REFERENCES proyectos(id), FOREIGN KEY(componente_id) REFERENCES componentes(id)
         )
     """)
     conexion.commit()
     conexion.close()
 
 iniciar_db()
+
+# --- EXTRACCIÓN 100% AUTOMÁTICA (API DE MOUSER) ---
+def buscar_specs_auto(mpn: str):
+    # API Key integrada
+    API_KEY = "bd8f8ed6-4501-4f81-b569-4ce1d68bb3cc" 
+    
+    url = f"https://api.mouser.com/api/v1/search/partnumber?apiKey={API_KEY}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "SearchByPartRequest": {
+            "mouserPartNumber": mpn,
+            "partSearchOptions": ""
+        }
+    }
+    
+    try:
+        respuesta = requests.post(url, json=payload, headers=headers)
+        if respuesta.status_code == 200:
+            datos = respuesta.json()
+            partes = datos.get("SearchResults", {}).get("Parts", [])
+            
+            if partes:
+                # Extraemos los atributos reales del primer resultado que encuentre
+                atributos_raw = partes[0].get("ProductAttributes", [])
+                specs_filtradas = {}
+                
+                for attr in atributos_raw:
+                    nombre = attr.get("AttributeName")
+                    valor = attr.get("AttributeValue")
+                    # Filtramos datos irrelevantes para mantener el modal limpio
+                    if nombre not in ["RoHS", "Lifecycle Status", "Product", "Brand"]:
+                        specs_filtradas[nombre] = valor
+                        
+                return specs_filtradas
+    except Exception as e:
+        print(f"Error consultando API: {e}")
+        
+    return {"Aviso": "Componente no encontrado en la base global o error de API."}
 
 # --- MODELOS ---
 class ComponenteWeb(BaseModel):
@@ -71,7 +98,6 @@ class ActualizacionStock(BaseModel):
     nuevo_stock: int
 
 # --- RUTAS DE INVENTARIO ---
-
 @app.get("/componentes")
 def obtener_componentes():
     conexion = sqlite3.connect("electrostock.db")
@@ -85,14 +111,17 @@ def obtener_componentes():
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
     datasheet = f"https://octopart.com/search?q={comp.mpn}"
-    specs = json.dumps({"Encapsulado": "ND", "RoHS": "Sí", "Categoría": "General"})
+    
+    # ⚡ Llamada a la API de Mouser
+    specs_reales = buscar_specs_auto(comp.mpn)
+    specs_json = json.dumps(specs_reales)
     
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
     try:
         cursor.execute(
             "INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)",
-            (comp.mpn, comp.nombre, comp.stock, datasheet, specs)
+            (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json)
         )
         conexion.commit()
     except sqlite3.IntegrityError:
@@ -105,37 +134,26 @@ def agregar_componente_web(comp: ComponenteWeb):
 def borrar_componente(componente_id: int):
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
-    
     cursor.execute("SELECT id FROM componentes WHERE id = ?", (componente_id,))
     if not cursor.fetchone():
         conexion.close()
         raise HTTPException(status_code=404, detail="Componente no encontrado")
-        
     cursor.execute("DELETE FROM componentes WHERE id = ?", (componente_id,))
     cursor.execute("DELETE FROM lista_materiales WHERE componente_id = ?", (componente_id,))
-    
     conexion.commit()
     conexion.close()
-    return {"mensaje": "Componente eliminado con éxito"}
+    return {"mensaje": "Eliminado"}
 
 @app.put("/componentes/{componente_id}/stock")
 def actualizar_stock(componente_id: int, datos: ActualizacionStock):
     conexion = sqlite3.connect("electrostock.db")
     cursor = conexion.cursor()
-    
-    cursor.execute("SELECT id FROM componentes WHERE id = ?", (componente_id,))
-    if not cursor.fetchone():
-        conexion.close()
-        raise HTTPException(status_code=404, detail="Componente no encontrado")
-        
     cursor.execute("UPDATE componentes SET stock = ? WHERE id = ?", (datos.nuevo_stock, componente_id))
     conexion.commit()
     conexion.close()
-    
-    return {"mensaje": "Stock actualizado correctamente", "nuevo_stock": datos.nuevo_stock}
+    return {"mensaje": "Stock actualizado"}
 
 # --- RUTAS DE PROYECTOS ---
-
 @app.get("/proyectos")
 def obtener_proyectos():
     conexion = sqlite3.connect("electrostock.db")
@@ -166,9 +184,7 @@ def obtener_bom(proyecto_id: int):
     cursor = conexion.cursor()
     cursor.execute('''
         SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm
-        JOIN componentes c ON lm.componente_id = c.id
-        WHERE lm.proyecto_id = ?
+        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
     ''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
@@ -191,7 +207,6 @@ def ensamblar_proyecto(proyecto_id: int):
     conexion = sqlite3.connect("electrostock.db")
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    
     cursor.execute("SELECT componente_id, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ?", (proyecto_id,))
     materiales = cursor.fetchall()
     
@@ -202,21 +217,15 @@ def ensamblar_proyecto(proyecto_id: int):
     for mat in materiales:
         comp_id = mat["componente_id"]
         cant_req = mat["cantidad_necesaria"]
-        
         cursor.execute("SELECT stock, mpn FROM componentes WHERE id = ?", (comp_id,))
         comp_db = cursor.fetchone()
-        
-        if not comp_db:
-            conexion.close()
-            raise HTTPException(status_code=400, detail="Componente no encontrado en inventario")
-            
         if comp_db["stock"] < cant_req:
             conexion.close()
-            raise HTTPException(status_code=400, detail=f"Stock insuficiente para MPN: {comp_db['mpn']}. Se necesitan {cant_req}, pero hay {comp_db['stock']}.")
+            raise HTTPException(status_code=400, detail=f"Stock insuficiente para MPN: {comp_db['mpn']}")
             
     for mat in materiales:
         cursor.execute("UPDATE componentes SET stock = stock - ? WHERE id = ?", (mat["cantidad_necesaria"], mat["componente_id"]))
         
     conexion.commit()
     conexion.close()
-    return {"mensaje": "Ensamblaje exitoso. Se descontó el stock del inventario."}
+    return {"mensaje": "Ensamblaje exitoso."}
