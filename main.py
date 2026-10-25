@@ -5,6 +5,7 @@ import sqlite3
 import json
 import requests
 import os
+import time  # <-- Importante para las pausas de reintento
 
 app = FastAPI()
 
@@ -43,7 +44,7 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (GEMINI 3.8 FLASH DIRECTO) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (REINTENTOS AUTOMÁTICOS) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     
@@ -67,20 +68,33 @@ def buscar_specs_ia(mpn: str):
         "contents": [{"parts": [{"text": prompt}]}]
     }
     
-    try:
-        respuesta = requests.post(url_segura, json=payload, headers=headers)
-        if respuesta.status_code == 200:
-            datos = respuesta.json()
-            texto = datos["candidates"][0]["content"]["parts"][0]["text"]
-            texto_limpio = texto.replace('```json', '').replace('```', '').strip()
-            return json.loads(texto_limpio)
-        else:
-            print(f"Error HTTP {respuesta.status_code}: {respuesta.text}")
-            return {"Aviso": f"Error de conexión con Google: {respuesta.status_code}. Revisa los logs."}
+    # Intentaremos hasta 3 veces si Google está saturado (Error 503)
+    max_intentos = 3
+    for intento in range(max_intentos):
+        try:
+            respuesta = requests.post(url_segura, json=payload, headers=headers)
             
-    except Exception as e:
-        print(f"Error con la IA: {e}")
-        return {"Aviso": "Error al conectar con la Inteligencia Artificial."}
+            if respuesta.status_code == 200:
+                datos = respuesta.json()
+                texto = datos["candidates"][0]["content"]["parts"][0]["text"]
+                texto_limpio = texto.replace('```json', '').replace('```', '').strip()
+                return json.loads(texto_limpio)
+                
+            elif respuesta.status_code == 503:
+                print(f"Google saturado (Intento {intento + 1} de {max_intentos}). Esperando 2 segundos...")
+                time.sleep(2)  # Pausa antes del siguiente intento
+                continue # Vuelve al inicio del bucle for
+                
+            else:
+                print(f"Error HTTP {respuesta.status_code}: {respuesta.text}")
+                return {"Aviso": f"Error de conexión con Google: {respuesta.status_code}."}
+                
+        except Exception as e:
+            print(f"Error con la IA: {e}")
+            return {"Aviso": "Error al conectar con la Inteligencia Artificial."}
+            
+    # Si falla las 3 veces seguidas:
+    return {"Aviso": "Los servidores de IA están demasiado ocupados en este momento. Intenta en unos minutos."}
 
 # --- MODELOS ---
 class ComponenteWeb(BaseModel):
@@ -112,7 +126,6 @@ def obtener_componentes():
 
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
-    # Enlace inteligente directo a AllDatasheet
     datasheet = f"[https://www.alldatasheet.com/view.jsp?Searchword=](https://www.alldatasheet.com/view.jsp?Searchword=){comp.mpn}"
     
     specs_ia = buscar_specs_ia(comp.mpn)
@@ -186,7 +199,7 @@ def obtener_bom(proyecto_id: int):
     cursor = conexion.cursor()
     cursor.execute('''
         SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
+        FROM lista_materiales lm JOIN c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
     ''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
