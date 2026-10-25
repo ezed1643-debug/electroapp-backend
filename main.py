@@ -43,48 +43,29 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (AUTO-DESCUBRIMIENTO) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada."}
     
-    # ⚡ PASO 1: LE PREGUNTAMOS A GOOGLE QUÉ MODELOS TIENES PERMITIDOS ⚡
-    url_modelos = f"https://generativelanguage.googleapis.com/v1beta/models?key={clave_secreta}"
-    try:
-        res_modelos = requests.get(url_modelos, timeout=15)
-        if res_modelos.status_code != 200:
-            return {"Aviso": "Tu API Key es inválida o fue bloqueada.", "Detalle": res_modelos.text}
-        
-        datos = res_modelos.json()
-        # Filtramos solo los modelos que sirven para generar texto (generateContent)
-        modelos_disponibles = [m["name"].split("/")[-1] for m in datos.get("models", []) if "generateContent" in m.get("supportedGenerationMethods", [])]
-        
-        if not modelos_disponibles:
-            return {"Aviso": "Tu API Key no tiene ningún modelo de texto habilitado por Google."}
-            
-        # Elegimos el mejor modelo (Prioridad: flash > pro > cualquiera que funcione)
-        modelo_elegido = modelos_disponibles[0]
-        for m in modelos_disponibles:
-            if "gemini-1.5-flash" in m:
-                modelo_elegido = m
-                break
-            elif "gemini-1.0-pro" in m:
-                modelo_elegido = m
-                
-    except Exception as e:
-        return {"Aviso": "Fallo al consultar permisos a Google.", "Detalle": str(e)}
-
-    # ⚡ PASO 2: EXTRAEMOS LOS DATOS USANDO EL MODELO QUE GOOGLE AUTORIZÓ ⚡
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    url_segura = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo_elegido}:generateContent?key={clave_secreta}"
+    # ⚡ USAMOS EXACTAMENTE EL MODELO QUE GOOGLE EXIGIÓ EN EL ERROR ⚡
+    parte1 = "https"
+    parte2 = "://"
+    parte3 = "generativelanguage.googleapis.com"
+    parte4 = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
+    url_segura = parte1 + parte2 + parte3 + parte4
+    
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
     ultimo_error = "Desconocido"
+    
     for intento in range(3):
         try:
-            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=25)
+            # Damos 30 segundos por intento (la tarea corre en 2do plano, la web no se traba)
+            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=30)
             
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -92,20 +73,20 @@ def buscar_specs_ia(mpn: str):
                 try:
                     return json.loads(texto_limpio)
                 except Exception as e:
-                    return {"Aviso": "Formato de IA inválido.", "Modelo": modelo_elegido, "Texto": texto_limpio}
+                    return {"Aviso": "Formato de IA inválido.", "Error": str(e), "Texto": texto_limpio}
             elif respuesta.status_code == 503:
                 ultimo_error = "Error 503: Google saturado."
                 time.sleep(2)
                 continue
             else: 
-                return {"Aviso": f"Error HTTP {respuesta.status_code}", "Modelo_Usado": modelo_elegido, "Detalle": respuesta.text}
+                return {"Aviso": f"Error HTTP {respuesta.status_code}", "Detalle": respuesta.text}
                 
         except requests.exceptions.Timeout:
-            ultimo_error = "Timeout: Render cortó la conexión."
+            ultimo_error = "Timeout: Render cortó la conexión o Google no respondió."
         except Exception as e: 
-            ultimo_error = f"Fallo de red: {str(e)}"
+            ultimo_error = f"Fallo de red ({type(e).__name__}): {str(e)}"
             
-    return {"Aviso": "Fallo definitivo de IA", "Modelo_Intentado": modelo_elegido, "Causa_Real": ultimo_error}
+    return {"Aviso": "Fallo definitivo de IA", "Causa_Real": ultimo_error}
 
 # Función que corre en segundo plano sin interrumpir al usuario
 def actualizar_specs_db(comp_id: int, mpn: str):
@@ -144,12 +125,10 @@ def agregar_componente_web(comp: ComponenteWeb, background_tasks: BackgroundTask
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # Se guarda el componente inmediatamente (0.1 segundos)
         cursor.execute("INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)", (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json))
         comp_id = cursor.lastrowid
         conexion.commit()
         
-        # ⚡ INICIAMOS LA IA EN SEGUNDO PLANO ⚡
         background_tasks.add_task(actualizar_specs_db, comp_id, comp.mpn)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="El componente ya existe.")
@@ -229,16 +208,13 @@ def agregar_a_bom(item: ComponenteProyecto):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # Buscamos si el componente ya está en el proyecto
         cursor.execute("SELECT rowid, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ? AND componente_id = ?", (item.proyecto_id, item.componente_id))
         registro = cursor.fetchone()
         
         if registro:
-            # Si existe, sumamos la cantidad
             nueva_cantidad = registro[1] + item.cantidad
             cursor.execute("UPDATE lista_materiales SET cantidad_necesaria = ? WHERE rowid = ?", (nueva_cantidad, registro[0]))
         else:
-            # Si no existe, lo creamos
             cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
             
         conexion.commit()
