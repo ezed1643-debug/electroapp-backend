@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
@@ -43,13 +43,14 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (AHORA INVISIBLE) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
-    if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
+    if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada."}
     
-    prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
+    prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
+    # Blindaje contra pegado de URL
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
@@ -61,7 +62,7 @@ def buscar_specs_ia(mpn: str):
     
     for intento in range(3):
         try:
-            # Aumentamos el tiempo de espera a 45 segundos para evitar el ReadTimeout
+            # Ahora le podemos dar hasta 45 segundos porque el usuario no está esperando mirando la pantalla
             respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=45)
             
             if respuesta.status_code == 200:
@@ -69,17 +70,31 @@ def buscar_specs_ia(mpn: str):
                 texto_limpio = texto.replace('```json', '').replace('```', '').strip()
                 try:
                     return json.loads(texto_limpio)
-                except Exception as e_json:
-                    return {"Error IA": "Formato JSON inválido", "Detalle": str(e_json)}
+                except:
+                    return {"Aviso": "Formato de IA inválido.", "Texto": texto_limpio}
             elif respuesta.status_code == 503:
                 time.sleep(2)
                 continue
             else: 
-                return {"Error HTTP": str(respuesta.status_code), "Mensaje": respuesta.text}
-        except Exception as e: 
-            return {"Error Fatal IA": type(e).__name__, "Mensaje": str(e)}
+                return {"Aviso": f"Error de Google: HTTP {respuesta.status_code}"}
+        except requests.exceptions.Timeout:
+            pass # Falla silenciosa de timeout
+        except Exception: 
+            pass # Falla silenciosa general
             
-    return {"Aviso": "Servidores de Google saturados (3 intentos fallidos)."}
+    return {"Aviso": "Los servidores de IA están bloqueados o fuera de línea (Timeout)."}
+
+# Función que corre en segundo plano sin interrumpir al usuario
+def actualizar_specs_db(comp_id: int, mpn: str):
+    specs = buscar_specs_ia(mpn)
+    specs_json = json.dumps(specs)
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("UPDATE componentes SET especificaciones = ? WHERE id = ?", (specs_json, comp_id))
+        conexion.commit()
+    finally:
+        conexion.close()
 
 class ComponenteWeb(BaseModel): mpn: str; nombre: str; stock: int
 class Proyecto(BaseModel): nombre: str
@@ -97,17 +112,27 @@ def obtener_componentes():
     return componentes
 
 @app.post("/agregar_componente_web")
-def agregar_componente_web(comp: ComponenteWeb):
-    datasheet = f"[https://www.alldatasheet.com/view.jsp?Searchword=](https://www.alldatasheet.com/view.jsp?Searchword=){comp.mpn}"
-    specs_json = json.dumps(buscar_specs_ia(comp.mpn))
+def agregar_componente_web(comp: ComponenteWeb, background_tasks: BackgroundTasks):
+    datasheet = f"https://www.alldatasheet.com/view.jsp?Searchword={comp.mpn}"
+    
+    # Texto temporal que se guarda al instante
+    specs_json = json.dumps({"IA": "Extrayendo datos en segundo plano... Vuelve a abrir esta ventana en unos segundos."})
+    
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
+        # Se guarda el componente inmediatamente (0.1 segundos)
         cursor.execute("INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)", (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json))
+        comp_id = cursor.lastrowid
         conexion.commit()
+        
+        # ⚡ INICIAMOS LA IA EN SEGUNDO PLANO ⚡
+        background_tasks.add_task(actualizar_specs_db, comp_id, comp.mpn)
     except sqlite3.IntegrityError:
-        raise HTTPException(status_code=400, detail="Ya existe")
-    finally: conexion.close()
+        raise HTTPException(status_code=400, detail="El componente ya existe.")
+    finally: 
+        conexion.close()
+        
     return {"mensaje": "Éxito"}
 
 @app.delete("/componentes/{componente_id}")
