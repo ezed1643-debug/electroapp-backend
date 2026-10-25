@@ -43,6 +43,7 @@ def iniciar_db():
 
 iniciar_db()
 
+# --- EXTRACCIÓN INTELIGENTE CON IA ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
@@ -55,23 +56,25 @@ def buscar_specs_ia(mpn: str):
     
     for intento in range(3):
         try:
-            respuesta = requests.post(url_segura, json=payload, headers=headers)
+            # Agregamos timeout=15 para que no se cuelgue si Google no responde
+            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=15)
+            
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
                 texto_limpio = texto.replace('```json', '').replace('```', '').strip()
                 try:
                     return json.loads(texto_limpio)
                 except Exception as e_json:
-                    return {"Aviso": "La IA no devolvió un formato válido.", "Detalle": str(e_json)}
+                    return {"Error IA": "Formato JSON inválido", "Detalle": str(e_json)}
             elif respuesta.status_code == 503:
                 time.sleep(2)
                 continue
             else: 
-                return {"Aviso": f"Error HTTP {respuesta.status_code}: {respuesta.text}"}
+                return {"Error HTTP": str(respuesta.status_code), "Mensaje": respuesta.text}
         except Exception as e: 
-            return {"Aviso": f"Error de conexión IA: {str(e)}"}
+            return {"Error Fatal IA": type(e).__name__, "Mensaje": str(e)}
             
-    return {"Aviso": "Servidores de Google saturados."}
+    return {"Aviso": "Servidores de Google saturados (3 intentos fallidos)."}
 
 class ComponenteWeb(BaseModel): mpn: str; nombre: str; stock: int
 class Proyecto(BaseModel): nombre: str
@@ -108,7 +111,6 @@ def borrar_componente(componente_id: int):
     cursor = conexion.cursor()
     try:
         cursor.execute("DELETE FROM componentes WHERE id = ?", (componente_id,))
-        # Usamos rowid por compatibilidad con tablas antiguas
         cursor.execute("DELETE FROM lista_materiales WHERE componente_id = ?", (componente_id,))
         conexion.commit()
     finally: conexion.close()
@@ -162,7 +164,7 @@ def obtener_bom(proyecto_id: int):
     conexion = conectar_db()
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    # SOLUCIÓN: Usamos lm.rowid AS id para que funcione en bases de datos antiguas que no tienen la columna id
+    # Usamos lm.rowid AS id para compatibilidad con bases de datos que no tengan la columna id original
     cursor.execute('''SELECT lm.rowid AS id, c.mpn, c.nombre, lm.cantidad_necesaria, c.stock 
                       FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id 
                       WHERE lm.proyecto_id = ?''', (proyecto_id,))
@@ -185,7 +187,6 @@ def quitar_de_bom(item_id: int):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # SOLUCIÓN: Usamos rowid para borrar de forma segura
         cursor.execute("DELETE FROM lista_materiales WHERE rowid = ?", (item_id,))
         conexion.commit()
     finally: conexion.close()
