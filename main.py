@@ -59,7 +59,6 @@ def buscar_specs_ia(mpn: str):
     
     protocolo = "https://"
     dominio = "generativelanguage.googleapis.com"
-    # Actualizado al modelo exacto que Google requiere: gemini-3.8-flash
     endpoint_ia = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
     url_segura = protocolo + dominio + endpoint_ia
     
@@ -113,7 +112,8 @@ def obtener_componentes():
 
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
-    datasheet = f"[https://octopart.com/search?q=](https://octopart.com/search?q=){comp.mpn}"
+    # Enlace inteligente directo a AllDatasheet
+    datasheet = f"[https://www.alldatasheet.com/view.jsp?Searchword=](https://www.alldatasheet.com/view.jsp?Searchword=){comp.mpn}"
     
     specs_ia = buscar_specs_ia(comp.mpn)
     specs_json = json.dumps(specs_ia)
