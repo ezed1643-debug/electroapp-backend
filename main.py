@@ -50,13 +50,18 @@ def buscar_specs_ia(mpn: str):
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    url_segura = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=){clave_secreta}"
+    # ⚡ BLINDAJE EXTREMO CONTRA AUTO-FORMATO ⚡
+    parte1 = "https"
+    parte2 = "://"
+    parte3 = "generativelanguage.googleapis.com"
+    parte4 = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
+    url_segura = parte1 + parte2 + parte3 + parte4
+    
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
     for intento in range(3):
         try:
-            # Agregamos timeout=15 para que no se cuelgue si Google no responde
             respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=15)
             
             if respuesta.status_code == 200:
@@ -164,7 +169,6 @@ def obtener_bom(proyecto_id: int):
     conexion = conectar_db()
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    # Usamos lm.rowid AS id para compatibilidad con bases de datos que no tengan la columna id original
     cursor.execute('''SELECT lm.rowid AS id, c.mpn, c.nombre, lm.cantidad_necesaria, c.stock 
                       FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id 
                       WHERE lm.proyecto_id = ?''', (proyecto_id,))
