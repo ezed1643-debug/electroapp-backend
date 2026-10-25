@@ -50,11 +50,11 @@ def buscar_specs_ia(mpn: str):
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    # ⚡ BLINDAJE CONTRA AUTO-FORMATO Y CAMBIO A MODELO LATEST ⚡
+    # ⚡ REGRESAMOS AL MODELO 3.8 QUE GOOGLE EXIGE Y BLINDAMOS LA URL ⚡
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
-    parte4 = f"/v1beta/models/gemini-1.5-flash-latest:generateContent?key={clave_secreta}"
+    parte4 = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
     url_segura = parte1 + parte2 + parte3 + parte4
     
     headers = {"Content-Type": "application/json"}
@@ -62,7 +62,8 @@ def buscar_specs_ia(mpn: str):
     
     for intento in range(3):
         try:
-            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=45)
+            # Le damos 60 segundos. Como corre en segundo plano, tu pantalla no se trabará.
+            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=60)
             
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
@@ -77,9 +78,9 @@ def buscar_specs_ia(mpn: str):
             else: 
                 return {"Aviso": f"Error de Google: HTTP {respuesta.status_code}"}
         except requests.exceptions.Timeout:
-            pass # Falla silenciosa de timeout
+            pass 
         except Exception: 
-            pass # Falla silenciosa general
+            pass 
             
     return {"Aviso": "Los servidores de IA están bloqueados o fuera de línea (Timeout)."}
 
@@ -205,16 +206,16 @@ def agregar_a_bom(item: ComponenteProyecto):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # 1. Buscamos si el componente ya está asignado a este proyecto específico
+        # Buscamos si el componente ya está en el proyecto
         cursor.execute("SELECT rowid, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ? AND componente_id = ?", (item.proyecto_id, item.componente_id))
         registro = cursor.fetchone()
         
         if registro:
-            # 2. Si ya existe, sumamos la cantidad requerida
+            # Si existe, sumamos la cantidad
             nueva_cantidad = registro[1] + item.cantidad
             cursor.execute("UPDATE lista_materiales SET cantidad_necesaria = ? WHERE rowid = ?", (nueva_cantidad, registro[0]))
         else:
-            # 3. Si es la primera vez, lo agregamos normalmente
+            # Si no existe, lo creamos
             cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
             
         conexion.commit()
