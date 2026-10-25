@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import sqlite3
 import json
-import google.generativeai as genai
+import requests
 import os
 
 app = FastAPI()
@@ -43,14 +43,12 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (GOOGLE GEMINI) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (CONEXIÓN DIRECTA REST) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     
     if not clave_secreta:
         return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
-        
-    genai.configure(api_key=clave_secreta)
     
     prompt = f"""
     Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'.
@@ -59,14 +57,25 @@ def buscar_specs_ia(mpn: str):
     Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
     """
     
+    # Conexión directa y forzada a los servidores de Google usando REST API
+    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){clave_secreta}"
+    headers = {"Content-Type": "application/json"}
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}]
+    }
+    
     try:
-        # Modelo oficial y estable
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        response = model.generate_content(prompt)
-        
-        texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(texto_limpio)
-        
+        respuesta = requests.post(url, json=payload, headers=headers)
+        if respuesta.status_code == 200:
+            datos = respuesta.json()
+            # Extraemos el texto de la respuesta cruda de Google
+            texto = datos["candidates"][0]["content"]["parts"][0]["text"]
+            texto_limpio = texto.replace('```json', '').replace('```', '').strip()
+            return json.loads(texto_limpio)
+        else:
+            print(f"Error HTTP {respuesta.status_code}: {respuesta.text}")
+            return {"Aviso": f"Error de conexión con Google: {respuesta.status_code}. Revisa los logs."}
+            
     except Exception as e:
         print(f"Error con la IA: {e}")
         return {"Aviso": "Error al conectar con la Inteligencia Artificial."}
@@ -175,7 +184,7 @@ def obtener_bom(proyecto_id: int):
     cursor = conexion.cursor()
     cursor.execute('''
         SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm JOIN c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
+        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
     ''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
