@@ -43,36 +43,13 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (AUTO-DESCUBRIMIENTO) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (GEMINI 3.8 FLASH DIRECTO) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     
     if not clave_secreta:
         return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
     
-    protocolo = "https://"
-    dominio = "generativelanguage.googleapis.com"
-    
-    # 1. AUTO-DESCUBRIMIENTO: Le preguntamos a Google qué modelos existen para esta llave
-    endpoint_lista = f"/v1beta/models?key={clave_secreta}"
-    url_lista = protocolo + dominio + endpoint_lista
-    modelo_elegido = "models/gemini-1.5-flash" # Valor por defecto
-    
-    try:
-        res_lista = requests.get(url_lista)
-        if res_lista.status_code == 200:
-            modelos_disponibles = res_lista.json().get("models", [])
-            for m in modelos_disponibles:
-                # Buscamos un modelo que soporte generación de texto
-                if "generateContent" in m.get("supportedGenerationMethods", []):
-                    modelo_elegido = m.get("name")
-                    # Si encontramos uno que sea 'flash', lo priorizamos y salimos del bucle
-                    if "flash" in modelo_elegido.lower():
-                        break
-    except Exception as e:
-        print(f"Error en auto-descubrimiento: {e}")
-
-    # 2. EXTRACCIÓN DE DATOS: Usamos el modelo que Google nos autorizó
     prompt = f"""
     Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'.
     Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional.
@@ -80,7 +57,10 @@ def buscar_specs_ia(mpn: str):
     Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
     """
     
-    endpoint_ia = f"/v1beta/{modelo_elegido}:generateContent?key={clave_secreta}"
+    protocolo = "https://"
+    dominio = "generativelanguage.googleapis.com"
+    # Actualizado al modelo exacto que Google requiere: gemini-3.8-flash
+    endpoint_ia = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
     url_segura = protocolo + dominio + endpoint_ia
     
     headers = {"Content-Type": "application/json"}
@@ -96,7 +76,7 @@ def buscar_specs_ia(mpn: str):
             texto_limpio = texto.replace('```json', '').replace('```', '').strip()
             return json.loads(texto_limpio)
         else:
-            print(f"Error HTTP {respuesta.status_code} usando {modelo_elegido}: {respuesta.text}")
+            print(f"Error HTTP {respuesta.status_code}: {respuesta.text}")
             return {"Aviso": f"Error de conexión con Google: {respuesta.status_code}. Revisa los logs."}
             
     except Exception as e:
