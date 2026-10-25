@@ -9,7 +9,6 @@ import time
 
 app = FastAPI()
 
-# --- CONFIGURACIÓN CORS ---
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], 
@@ -18,11 +17,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# --- BASE DE DATOS (CONEXIÓN ANTIBLOQUEOS) ---
 def conectar_db():
-    # timeout=20: Espera pacientemente si la base está en uso en lugar de lanzar error
     conexion = sqlite3.connect("electrostock.db", timeout=20.0)
-    # Habilita el modo WAL para permitir lecturas y escrituras simultáneas
     conexion.execute("PRAGMA journal_mode=WAL;")
     return conexion
 
@@ -31,12 +27,8 @@ def iniciar_db():
     cursor = conexion.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS componentes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            mpn TEXT UNIQUE NOT NULL,
-            nombre TEXT NOT NULL,
-            stock INTEGER NOT NULL,
-            datasheet_url TEXT,
-            especificaciones TEXT
+            id INTEGER PRIMARY KEY AUTOINCREMENT, mpn TEXT UNIQUE NOT NULL, nombre TEXT NOT NULL,
+            stock INTEGER NOT NULL, datasheet_url TEXT, especificaciones TEXT
         )
     """)
     cursor.execute("CREATE TABLE IF NOT EXISTS proyectos (id INTEGER PRIMARY KEY AUTOINCREMENT, nombre TEXT UNIQUE NOT NULL)")
@@ -51,74 +43,34 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
+    if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
     
-    if not clave_secreta:
-        return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
+    prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    prompt = f"""
-    Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'.
-    Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional.
-    Ejemplo de formato: {{"Tipo": "Microcontrolador", "Encapsulado": "LQFP-48", "Voltaje de Operación": "2.0V a 3.6V", "Corriente Máx": "150mA", "Frecuencia": "72MHz", "Pines I/O": "37", "Memoria Flash": "64KB", "Temperatura": "-40 a 85C"}}
-    Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
-    """
-    
-    protocolo = "https://"
-    dominio = "generativelanguage.googleapis.com"
-    endpoint_ia = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
-    url_segura = protocolo + dominio + endpoint_ia
-    
+    url_segura = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key=){clave_secreta}"
     headers = {"Content-Type": "application/json"}
-    payload = {
-        "contents": [{"parts": [{"text": prompt}]}]
-    }
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
-    max_intentos = 3
-    for intento in range(max_intentos):
+    for intento in range(3):
         try:
             respuesta = requests.post(url_segura, json=payload, headers=headers)
-            
             if respuesta.status_code == 200:
-                datos = respuesta.json()
-                texto = datos["candidates"][0]["content"]["parts"][0]["text"]
-                texto_limpio = texto.replace('```json', '').replace('```', '').strip()
-                return json.loads(texto_limpio)
-                
+                texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
+                return json.loads(texto.replace('```json', '').replace('```', '').strip())
             elif respuesta.status_code == 503:
-                print(f"Google saturado (Intento {intento + 1} de {max_intentos}). Esperando 2 segundos...")
                 time.sleep(2)
                 continue
-                
-            else:
-                print(f"Error HTTP {respuesta.status_code}: {respuesta.text}")
-                return {"Aviso": f"Error de conexión con Google: {respuesta.status_code}."}
-                
-        except Exception as e:
-            print(f"Error con la IA: {e}")
-            return {"Aviso": "Error al conectar con la Inteligencia Artificial."}
-            
-    return {"Aviso": "Los servidores de IA están demasiado ocupados en este momento. Intenta en unos minutos."}
+            else: return {"Aviso": f"Error {respuesta.status_code}."}
+        except Exception as e: return {"Aviso": "Error IA."}
+    return {"Aviso": "Servidores saturados."}
 
-# --- MODELOS ---
-class ComponenteWeb(BaseModel):
-    mpn: str
-    nombre: str
-    stock: int
+class ComponenteWeb(BaseModel): mpn: str; nombre: str; stock: int
+class Proyecto(BaseModel): nombre: str
+class ComponenteProyecto(BaseModel): proyecto_id: int; componente_id: int; cantidad: int
+class ActualizacionStock(BaseModel): nuevo_stock: int
 
-class Proyecto(BaseModel):
-    nombre: str
-
-class ComponenteProyecto(BaseModel):
-    proyecto_id: int
-    componente_id: int
-    cantidad: int
-
-class ActualizacionStock(BaseModel):
-    nuevo_stock: int
-
-# --- RUTAS DE INVENTARIO ---
 @app.get("/componentes")
 def obtener_componentes():
     conexion = conectar_db()
@@ -132,38 +84,26 @@ def obtener_componentes():
 @app.post("/agregar_componente_web")
 def agregar_componente_web(comp: ComponenteWeb):
     datasheet = f"[https://www.alldatasheet.com/view.jsp?Searchword=](https://www.alldatasheet.com/view.jsp?Searchword=){comp.mpn}"
-    
-    specs_ia = buscar_specs_ia(comp.mpn)
-    specs_json = json.dumps(specs_ia)
-    
+    specs_json = json.dumps(buscar_specs_ia(comp.mpn))
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)",
-            (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json)
-        )
+        cursor.execute("INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)", (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json))
         conexion.commit()
     except sqlite3.IntegrityError:
-        conexion.close()
-        raise HTTPException(status_code=400, detail="El componente ya existe en el inventario")
-    finally:
-        conexion.close()
-    return {"mensaje": f"Componente {comp.mpn} agregado con éxito"}
+        raise HTTPException(status_code=400, detail="Ya existe")
+    finally: conexion.close()
+    return {"mensaje": "Éxito"}
 
 @app.delete("/componentes/{componente_id}")
 def borrar_componente(componente_id: int):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        cursor.execute("SELECT id FROM componentes WHERE id = ?", (componente_id,))
-        if not cursor.fetchone():
-            raise HTTPException(status_code=404, detail="Componente no encontrado")
         cursor.execute("DELETE FROM componentes WHERE id = ?", (componente_id,))
         cursor.execute("DELETE FROM lista_materiales WHERE componente_id = ?", (componente_id,))
         conexion.commit()
-    finally:
-        conexion.close()
+    finally: conexion.close()
     return {"mensaje": "Eliminado"}
 
 @app.put("/componentes/{componente_id}/stock")
@@ -173,11 +113,9 @@ def actualizar_stock(componente_id: int, datos: ActualizacionStock):
     try:
         cursor.execute("UPDATE componentes SET stock = ? WHERE id = ?", (datos.nuevo_stock, componente_id))
         conexion.commit()
-    finally:
-        conexion.close()
-    return {"mensaje": "Stock actualizado"}
+    finally: conexion.close()
+    return {"mensaje": "Actualizado"}
 
-# --- RUTAS DE PROYECTOS ---
 @app.get("/proyectos")
 def obtener_proyectos():
     conexion = conectar_db()
@@ -196,21 +134,28 @@ def crear_proyecto(proy: Proyecto):
         cursor.execute("INSERT INTO proyectos (nombre) VALUES (?)", (proy.nombre,))
         conexion.commit()
     except sqlite3.IntegrityError:
-        conexion.close()
-        raise HTTPException(status_code=400, detail="El proyecto ya existe")
-    finally:
-        conexion.close()
-    return {"mensaje": "Proyecto creado con éxito"}
+        raise HTTPException(status_code=400, detail="Ya existe")
+    finally: conexion.close()
+    return {"mensaje": "Creado"}
+
+# NUEVO: Eliminar proyecto completo
+@app.delete("/proyectos/{proyecto_id}")
+def borrar_proyecto(proyecto_id: int):
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("DELETE FROM lista_materiales WHERE proyecto_id = ?", (proyecto_id,))
+        cursor.execute("DELETE FROM proyectos WHERE id = ?", (proyecto_id,))
+        conexion.commit()
+    finally: conexion.close()
+    return {"mensaje": "Proyecto eliminado"}
 
 @app.get("/lista_materiales/{proyecto_id}")
 def obtener_bom(proyecto_id: int):
     conexion = conectar_db()
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    cursor.execute('''
-        SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
-    ''', (proyecto_id,))
+    cursor.execute('''SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria, c.stock FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
     return bom
@@ -220,41 +165,38 @@ def agregar_a_bom(item: ComponenteProyecto):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)",
-            (item.proyecto_id, item.componente_id, item.cantidad)
-        )
+        cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
         conexion.commit()
-    finally:
-        conexion.close()
-    return {"mensaje": "Componente añadido a la lista de materiales"}
+    finally: conexion.close()
+    return {"mensaje": "Añadido"}
+
+# NUEVO: Quitar componente de un proyecto
+@app.delete("/lista_materiales/{item_id}")
+def quitar_de_bom(item_id: int):
+    conexion = conectar_db()
+    cursor = conexion.cursor()
+    try:
+        cursor.execute("DELETE FROM lista_materiales WHERE id = ?", (item_id,))
+        conexion.commit()
+    finally: conexion.close()
+    return {"mensaje": "Removido"}
 
 @app.post("/ensamblar_proyecto/{proyecto_id}")
 def ensamblar_proyecto(proyecto_id: int):
     conexion = conectar_db()
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    
     try:
         cursor.execute("SELECT componente_id, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ?", (proyecto_id,))
         materiales = cursor.fetchall()
-        
-        if not materiales:
-            raise HTTPException(status_code=400, detail="El proyecto no tiene componentes asignados.")
-            
+        if not materiales: raise HTTPException(status_code=400, detail="Sin componentes.")
         for mat in materiales:
-            comp_id = mat["componente_id"]
-            cant_req = mat["cantidad_necesaria"]
-            cursor.execute("SELECT stock, mpn FROM componentes WHERE id = ?", (comp_id,))
+            cursor.execute("SELECT stock, mpn FROM componentes WHERE id = ?", (mat["componente_id"],))
             comp_db = cursor.fetchone()
-            if comp_db["stock"] < cant_req:
-                raise HTTPException(status_code=400, detail=f"Stock insuficiente para MPN: {comp_db['mpn']}")
-                
+            if comp_db["stock"] < mat["cantidad_necesaria"]:
+                raise HTTPException(status_code=400, detail=f"Stock insuficiente para {comp_db['mpn']}")
         for mat in materiales:
             cursor.execute("UPDATE componentes SET stock = stock - ? WHERE id = ?", (mat["cantidad_necesaria"], mat["componente_id"]))
-            
         conexion.commit()
-    finally:
-        conexion.close()
-        
+    finally: conexion.close()
     return {"mensaje": "Ensamblaje exitoso."}
