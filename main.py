@@ -52,7 +52,6 @@ def buscar_specs_ia(mpn: str):
         
     genai.configure(api_key=clave_secreta)
     
-    # Hemos modificado el prompt para pedir hasta 10 especificaciones detalladas
     prompt = f"""
     Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'.
     Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional.
@@ -61,7 +60,8 @@ def buscar_specs_ia(mpn: str):
     """
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        # Usamos el modelo universal 'gemini-pro' que es compatible con todas las versiones de la API
+        model = genai.GenerativeModel('gemini-pro')
         response = model.generate_content(prompt)
         
         texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
@@ -175,7 +175,7 @@ def obtener_bom(proyecto_id: int):
     cursor = conexion.cursor()
     cursor.execute('''
         SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
+        FROM lista_materiales lm JOIN c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
     ''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
