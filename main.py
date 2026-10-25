@@ -50,11 +50,11 @@ def buscar_specs_ia(mpn: str):
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    # Blindaje contra pegado de URL
+    # ⚡ BLINDAJE CONTRA AUTO-FORMATO Y CAMBIO A MODELO LATEST ⚡
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
-    parte4 = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
+    parte4 = f"/v1beta/models/gemini-1.5-flash-latest:generateContent?key={clave_secreta}"
     url_segura = parte1 + parte2 + parte3 + parte4
     
     headers = {"Content-Type": "application/json"}
@@ -62,7 +62,6 @@ def buscar_specs_ia(mpn: str):
     
     for intento in range(3):
         try:
-            # Ahora le podemos dar hasta 45 segundos porque el usuario no está esperando mirando la pantalla
             respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=45)
             
             if respuesta.status_code == 200:
