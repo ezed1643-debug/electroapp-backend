@@ -58,13 +58,20 @@ def buscar_specs_ia(mpn: str):
             respuesta = requests.post(url_segura, json=payload, headers=headers)
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
-                return json.loads(texto.replace('```json', '').replace('```', '').strip())
+                texto_limpio = texto.replace('```json', '').replace('```', '').strip()
+                try:
+                    return json.loads(texto_limpio)
+                except Exception as e_json:
+                    return {"Aviso": "La IA no devolvió un formato válido.", "Detalle": str(e_json)}
             elif respuesta.status_code == 503:
                 time.sleep(2)
                 continue
-            else: return {"Aviso": f"Error {respuesta.status_code}."}
-        except Exception as e: return {"Aviso": "Error IA."}
-    return {"Aviso": "Servidores saturados."}
+            else: 
+                return {"Aviso": f"Error HTTP {respuesta.status_code}: {respuesta.text}"}
+        except Exception as e: 
+            return {"Aviso": f"Error de conexión IA: {str(e)}"}
+            
+    return {"Aviso": "Servidores de Google saturados."}
 
 class ComponenteWeb(BaseModel): mpn: str; nombre: str; stock: int
 class Proyecto(BaseModel): nombre: str
@@ -101,6 +108,7 @@ def borrar_componente(componente_id: int):
     cursor = conexion.cursor()
     try:
         cursor.execute("DELETE FROM componentes WHERE id = ?", (componente_id,))
+        # Usamos rowid por compatibilidad con tablas antiguas
         cursor.execute("DELETE FROM lista_materiales WHERE componente_id = ?", (componente_id,))
         conexion.commit()
     finally: conexion.close()
@@ -138,7 +146,6 @@ def crear_proyecto(proy: Proyecto):
     finally: conexion.close()
     return {"mensaje": "Creado"}
 
-# NUEVO: Eliminar proyecto completo
 @app.delete("/proyectos/{proyecto_id}")
 def borrar_proyecto(proyecto_id: int):
     conexion = conectar_db()
@@ -155,7 +162,10 @@ def obtener_bom(proyecto_id: int):
     conexion = conectar_db()
     conexion.row_factory = sqlite3.Row
     cursor = conexion.cursor()
-    cursor.execute('''SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria, c.stock FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?''', (proyecto_id,))
+    # SOLUCIÓN: Usamos lm.rowid AS id para que funcione en bases de datos antiguas que no tienen la columna id
+    cursor.execute('''SELECT lm.rowid AS id, c.mpn, c.nombre, lm.cantidad_necesaria, c.stock 
+                      FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id 
+                      WHERE lm.proyecto_id = ?''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
     return bom
@@ -170,13 +180,13 @@ def agregar_a_bom(item: ComponenteProyecto):
     finally: conexion.close()
     return {"mensaje": "Añadido"}
 
-# NUEVO: Quitar componente de un proyecto
 @app.delete("/lista_materiales/{item_id}")
 def quitar_de_bom(item_id: int):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        cursor.execute("DELETE FROM lista_materiales WHERE id = ?", (item_id,))
+        # SOLUCIÓN: Usamos rowid para borrar de forma segura
+        cursor.execute("DELETE FROM lista_materiales WHERE rowid = ?", (item_id,))
         conexion.commit()
     finally: conexion.close()
     return {"mensaje": "Removido"}
