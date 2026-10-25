@@ -43,18 +43,18 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (DEPURACIÓN EXTREMA) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (API ESTABLE v1) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada."}
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    # ⚡ CAMBIAMOS AL MODELO UNIVERSAL 'gemini-pro' ⚡
+    # ⚡ CAMBIAMOS A LA VERSIÓN ESTABLE (v1) Y EL MODELO OFICIAL ⚡
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
-    parte4 = f"/v1beta/models/gemini-pro:generateContent?key={clave_secreta}"
+    parte4 = f"/v1/models/gemini-1.5-flash:generateContent?key={clave_secreta}"
     url_segura = parte1 + parte2 + parte3 + parte4
     
     headers = {"Content-Type": "application/json"}
@@ -125,12 +125,10 @@ def agregar_componente_web(comp: ComponenteWeb, background_tasks: BackgroundTask
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # Se guarda el componente inmediatamente (0.1 segundos)
         cursor.execute("INSERT INTO componentes (mpn, nombre, stock, datasheet_url, especificaciones) VALUES (?, ?, ?, ?, ?)", (comp.mpn, comp.nombre, comp.stock, datasheet, specs_json))
         comp_id = cursor.lastrowid
         conexion.commit()
         
-        # ⚡ INICIAMOS LA IA EN SEGUNDO PLANO ⚡
         background_tasks.add_task(actualizar_specs_db, comp_id, comp.mpn)
     except sqlite3.IntegrityError:
         raise HTTPException(status_code=400, detail="El componente ya existe.")
@@ -210,16 +208,13 @@ def agregar_a_bom(item: ComponenteProyecto):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        # Buscamos si el componente ya está en el proyecto
         cursor.execute("SELECT rowid, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ? AND componente_id = ?", (item.proyecto_id, item.componente_id))
         registro = cursor.fetchone()
         
         if registro:
-            # Si existe, sumamos la cantidad
             nueva_cantidad = registro[1] + item.cantidad
             cursor.execute("UPDATE lista_materiales SET cantidad_necesaria = ? WHERE rowid = ?", (nueva_cantidad, registro[0]))
         else:
-            # Si no existe, lo creamos
             cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
             
         conexion.commit()
