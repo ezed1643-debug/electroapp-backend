@@ -45,24 +45,23 @@ iniciar_db()
 
 # --- EXTRACCIÓN INTELIGENTE CON IA (GOOGLE GEMINI) ---
 def buscar_specs_ia(mpn: str):
-    # La clave ahora se obtiene de las variables de entorno de Render
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     
-    # Manejo de error por si olvidaste configurar la variable en Render
     if not clave_secreta:
         return {"Aviso": "Error: GEMINI_API_KEY no configurada en Render."}
         
     genai.configure(api_key=clave_secreta)
     
+    # Hemos modificado el prompt para pedir hasta 10 especificaciones detalladas
     prompt = f"""
-    Eres un ingeniero electrónico experto. Necesito las 5 especificaciones técnicas más importantes del componente electrónico '{mpn}'.
+    Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'.
     Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional.
-    Ejemplo de formato: {{"Encapsulado": "TO-92", "Voltaje Máximo": "45V", "Corriente": "100mA", "Tipo": "Transistor NPN"}}
+    Ejemplo de formato: {{"Tipo": "Microcontrolador", "Encapsulado": "LQFP-48", "Voltaje de Operación": "2.0V a 3.6V", "Corriente Máx": "150mA", "Frecuencia": "72MHz", "Pines I/O": "37", "Memoria Flash": "64KB", "Temperatura": "-40 a 85C"}}
     Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
     """
     
     try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
         
         texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
