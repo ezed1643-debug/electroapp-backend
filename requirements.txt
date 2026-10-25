@@ -1,4 +1,5 @@
 fastapi
 uvicorn
 pydantic
-google-generativeai
+requests
+google-generativeai>=0.8.0

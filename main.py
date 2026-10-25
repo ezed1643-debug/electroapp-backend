@@ -60,8 +60,8 @@ def buscar_specs_ia(mpn: str):
     """
     
     try:
-        # Usamos el modelo universal 'gemini-pro' que es compatible con todas las versiones de la API
-        model = genai.GenerativeModel('gemini-pro')
+        # Modelo oficial y estable
+        model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(prompt)
         
         texto_limpio = response.text.replace('```json', '').replace('```', '').strip()
