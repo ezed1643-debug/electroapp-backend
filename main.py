@@ -57,18 +57,20 @@ def buscar_specs_ia(mpn: str):
     Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
     """
     
-    # Conexión directa y forzada a los servidores de Google usando REST API
-    url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=){clave_secreta}"
+    # Dividimos la URL para que el chat no la convierta accidentalmente en un hipervínculo roto
+    base_url = "[https://generativelanguage.googleapis.com](https://generativelanguage.googleapis.com)"
+    endpoint = f"/v1beta/models/gemini-1.5-flash:generateContent?key={clave_secreta}"
+    url_segura = base_url + endpoint
+    
     headers = {"Content-Type": "application/json"}
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
     }
     
     try:
-        respuesta = requests.post(url, json=payload, headers=headers)
+        respuesta = requests.post(url_segura, json=payload, headers=headers)
         if respuesta.status_code == 200:
             datos = respuesta.json()
-            # Extraemos el texto de la respuesta cruda de Google
             texto = datos["candidates"][0]["content"]["parts"][0]["text"]
             texto_limpio = texto.replace('```json', '').replace('```', '').strip()
             return json.loads(texto_limpio)
@@ -112,7 +114,6 @@ def obtener_componentes():
 def agregar_componente_web(comp: ComponenteWeb):
     datasheet = f"[https://octopart.com/search?q=](https://octopart.com/search?q=){comp.mpn}"
     
-    # Llamada a la IA para obtener las especificaciones reales
     specs_ia = buscar_specs_ia(comp.mpn)
     specs_json = json.dumps(specs_ia)
     
@@ -184,7 +185,7 @@ def obtener_bom(proyecto_id: int):
     cursor = conexion.cursor()
     cursor.execute('''
         SELECT lm.id, c.mpn, c.nombre, lm.cantidad_necesaria 
-        FROM lista_materiales lm JOIN componentes c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
+        FROM lista_materiales lm JOIN c ON lm.componente_id = c.id WHERE lm.proyecto_id = ?
     ''', (proyecto_id,))
     bom = [dict(row) for row in cursor.fetchall()]
     conexion.close()
