@@ -43,46 +43,50 @@ def iniciar_db():
 
 iniciar_db()
 
-# --- EXTRACCIÓN INTELIGENTE CON IA (AHORA INVISIBLE) ---
+# --- EXTRACCIÓN INTELIGENTE CON IA (DEPURACIÓN EXTREMA) ---
 def buscar_specs_ia(mpn: str):
     clave_secreta = os.getenv("GEMINI_API_KEY") 
     if not clave_secreta: return {"Aviso": "Error: GEMINI_API_KEY no configurada."}
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    # ⚡ REGRESAMOS AL MODELO 3.8 QUE GOOGLE EXIGE Y BLINDAMOS LA URL ⚡
+    # ⚡ Usamos el modelo estable 1.5-flash y blindamos la URL ⚡
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
-    parte4 = f"/v1beta/models/gemini-3.8-flash:generateContent?key={clave_secreta}"
+    parte4 = f"/v1beta/models/gemini-1.5-flash:generateContent?key={clave_secreta}"
     url_segura = parte1 + parte2 + parte3 + parte4
     
     headers = {"Content-Type": "application/json"}
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     
+    ultimo_error = "Desconocido"
+    
     for intento in range(3):
         try:
-            # Le damos 60 segundos. Como corre en segundo plano, tu pantalla no se trabará.
-            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=60)
+            # 20 segundos por intento para capturar rápido el error
+            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=20)
             
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
                 texto_limpio = texto.replace('```json', '').replace('```', '').strip()
                 try:
                     return json.loads(texto_limpio)
-                except:
-                    return {"Aviso": "Formato de IA inválido.", "Texto": texto_limpio}
+                except Exception as e:
+                    return {"Aviso": "Formato de IA inválido.", "Error": str(e), "Texto": texto_limpio}
             elif respuesta.status_code == 503:
+                ultimo_error = "Error 503: Google saturado."
                 time.sleep(2)
                 continue
             else: 
-                return {"Aviso": f"Error de Google: HTTP {respuesta.status_code}"}
+                return {"Aviso": f"Error HTTP {respuesta.status_code}", "Detalle": respuesta.text}
+                
         except requests.exceptions.Timeout:
-            pass 
-        except Exception: 
-            pass 
+            ultimo_error = "Timeout: Render cortó la conexión o Google no respondió."
+        except Exception as e: 
+            ultimo_error = f"Fallo de red ({type(e).__name__}): {str(e)}"
             
-    return {"Aviso": "Los servidores de IA están bloqueados o fuera de línea (Timeout)."}
+    return {"Aviso": "Fallo definitivo de IA", "Causa_Real": ultimo_error}
 
 # Función que corre en segundo plano sin interrumpir al usuario
 def actualizar_specs_db(comp_id: int, mpn: str):
