@@ -206,10 +206,22 @@ def agregar_a_bom(item: ComponenteProyecto):
     conexion = conectar_db()
     cursor = conexion.cursor()
     try:
-        cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
+        # 1. Buscamos si el componente ya está asignado a este proyecto específico
+        cursor.execute("SELECT rowid, cantidad_necesaria FROM lista_materiales WHERE proyecto_id = ? AND componente_id = ?", (item.proyecto_id, item.componente_id))
+        registro = cursor.fetchone()
+        
+        if registro:
+            # 2. Si ya existe, sumamos la cantidad requerida
+            nueva_cantidad = registro[1] + item.cantidad
+            cursor.execute("UPDATE lista_materiales SET cantidad_necesaria = ? WHERE rowid = ?", (nueva_cantidad, registro[0]))
+        else:
+            # 3. Si es la primera vez, lo agregamos normalmente
+            cursor.execute("INSERT INTO lista_materiales (proyecto_id, componente_id, cantidad_necesaria) VALUES (?, ?, ?)", (item.proyecto_id, item.componente_id, item.cantidad))
+            
         conexion.commit()
-    finally: conexion.close()
-    return {"mensaje": "Añadido"}
+    finally: 
+        conexion.close()
+    return {"mensaje": "Lista de materiales actualizada"}
 
 @app.delete("/lista_materiales/{item_id}")
 def quitar_de_bom(item_id: int):
