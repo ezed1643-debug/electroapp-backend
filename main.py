@@ -57,10 +57,11 @@ def buscar_specs_ia(mpn: str):
     Si no conoces el componente, devuelve: {{"Aviso": "Componente demasiado inusual, requiere verificación manual"}}
     """
     
-    # Dividimos la URL para que el chat no la convierta accidentalmente en un hipervínculo roto
-    base_url = "[https://generativelanguage.googleapis.com](https://generativelanguage.googleapis.com)"
+    # ⚡ BLINDAJE CONTRA PEGADO INTELIGENTE (MARKDOWN)
+    protocolo = "https://"
+    dominio = "generativelanguage.googleapis.com"
     endpoint = f"/v1beta/models/gemini-1.5-flash:generateContent?key={clave_secreta}"
-    url_segura = base_url + endpoint
+    url_segura = protocolo + dominio + endpoint
     
     headers = {"Content-Type": "application/json"}
     payload = {
