@@ -50,7 +50,6 @@ def buscar_specs_ia(mpn: str):
     
     prompt = f"""Eres un ingeniero electrónico experto. Necesito hasta 10 especificaciones técnicas clave del componente electrónico '{mpn}'. Devuelve ÚNICAMENTE un objeto JSON válido. No uses markdown, no uses bloques de código (```json), no agregues texto adicional. Ejemplo: {{"Tipo": "Microcontrolador", "Voltaje": "3.3V"}}"""
     
-    # ⚡ BLINDAJE EXTREMO CONTRA AUTO-FORMATO ⚡
     parte1 = "https"
     parte2 = "://"
     parte3 = "generativelanguage.googleapis.com"
@@ -62,7 +61,8 @@ def buscar_specs_ia(mpn: str):
     
     for intento in range(3):
         try:
-            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=15)
+            # Aumentamos el tiempo de espera a 45 segundos para evitar el ReadTimeout
+            respuesta = requests.post(url_segura, json=payload, headers=headers, timeout=45)
             
             if respuesta.status_code == 200:
                 texto = respuesta.json()["candidates"][0]["content"]["parts"][0]["text"]
